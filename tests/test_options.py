@@ -1199,6 +1199,55 @@ def test_missing_envvar_sequence(runner, envvar, expected):
     assert f"Error: Missing option {expected}." in result.output
 
 
+def test_missing_envvar_auto_prefix(runner):
+    @click.command(context_settings={"auto_envvar_prefix": "MYAPP"})
+    @click.option("--port", type=int, required=True, show_envvar=True)
+    def cli(port):
+        pass
+
+    result = runner.invoke(cli, [])
+    assert result.exit_code == 2
+    assert "Error: Missing option '--port' (env var: 'MYAPP_PORT')." in result.output
+
+    result = runner.invoke(cli, ["--port", "invalid"])
+    assert result.exit_code == 2
+    assert (
+        "Error: Invalid value for '--port' (env var: 'MYAPP_PORT'):"
+        " 'invalid' is not a valid integer."
+    ) in result.output
+
+    @click.command(context_settings={"auto_envvar_prefix": "MYAPP"})
+    @click.option(
+        "--port",
+        type=int,
+        required=True,
+        show_envvar=True,
+        allow_from_autoenv=False,
+    )
+    def cli_no_autoenv(port):
+        pass
+
+    result = runner.invoke(cli_no_autoenv, [])
+    assert result.exit_code == 2
+    assert "Error: Missing option '--port'." in result.output
+
+
+def test_missing_envvar_auto_prefix_subcommand(runner):
+    @click.group(context_settings={"auto_envvar_prefix": "TEST"})
+    def cli():
+        pass
+
+    @cli.command()
+    @click.option("--baz", show_envvar=True, required=True)
+    def foo_bar(baz):
+        pass
+
+    result = runner.invoke(cli, ["foo-bar"])
+    assert result.exit_code == 2
+    expected = "Error: Missing option '--baz' (env var: 'TEST_FOO_BAR_BAZ')."
+    assert expected in result.output
+
+
 def test_case_insensitive_choice(runner):
     @click.command()
     @click.option("--foo", type=click.Choice(["Orange", "Apple"], case_sensitive=False))
