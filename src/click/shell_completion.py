@@ -208,10 +208,9 @@ complete --no-files --command %(prog_name)s --arguments \
 # Compatible with Windows PowerShell 5.1+ and PowerShell (pwsh) 7+.
 # Uses Register-ArgumentCompleter -Native, which receives the command AST
 # as parsed by PowerShell. The command text is forwarded verbatim through
-# COMP_WORDS so the Python side can reuse the same shlex-based splitting
-# used by the bash/zsh completers.
+# COMP_WORDS so the Python side can split arguments according to PowerShell rules.
 _SOURCE_POWERSHELL = """\
-Register-ArgumentCompleter -Native -CommandName %(prog_name)s -ScriptBlock {
+Register-ArgumentCompleter -Native -CommandName '%(prog_name)s' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $prev_complete = $env:%(complete_var)s
@@ -227,7 +226,7 @@ Register-ArgumentCompleter -Native -CommandName %(prog_name)s -ScriptBlock {
     }
 
     try {
-        $response = & %(prog_name)s 2>$null
+        $response = & '%(prog_name)s' 2>$null
     } finally {
         $env:%(complete_var)s = $prev_complete
         $env:COMP_WORDS = $prev_words
@@ -522,8 +521,13 @@ class PowerShellComplete(ShellComplete):
     name: t.ClassVar[str] = "powershell"
     source_template: t.ClassVar[str] = _SOURCE_POWERSHELL
 
+    def source_vars(self) -> _SourceVarsDict:
+        vars = super().source_vars()
+        vars["prog_name"] = vars["prog_name"].replace("'", "''")
+        return vars
+
     def get_completion_args(self) -> tuple[list[str], str]:
-        cwords = split_arg_string(os.environ["COMP_WORDS"])
+        cwords = _split_powershell_arg_string(os.environ["COMP_WORDS"])
         cword = int(os.environ["COMP_CWORD"])
         args = cwords[1:cword]
 
@@ -629,6 +633,105 @@ def split_arg_string(string: str) -> list[str]:
         out.append(lex.token)
 
     return out
+
+
+_POWERSHELL_ESCAPES: t.Final[dict[str, str]] = {
+    "0": "\0",
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
+
+
+def _split_powershell_arg_string(string: str) -> list[str]:
+    """Split an argument string according to PowerShell rules.
+
+    Unlike POSIX shells, PowerShell treats backslashes (``\\``) as literal
+    characters (used in Windows file paths), while backticks (``` `` ```) are
+    used for escaping. Within single quotes (``'``), all characters are literal
+    except two consecutive single quotes (``''``) which represent a single quote.
+    Within double quotes (``"``), backticks and doubled double quotes (``""``)
+    escape quotes, while backslashes remain literal.
+    """
+    out: list[str] = []
+    current: list[str] = []
+    in_token = False
+    state = "UNQUOTED"
+    i = 0
+    n = len(string)
+
+    while i < n:
+        c = string[i]
+
+        if state == "UNQUOTED":
+            if c in " \t\r\n":
+                if in_token:
+                    out.append("".join(current))
+                    current.clear()
+                    in_token = False
+                i += 1
+            elif c == "'":
+                in_token = True
+                state = "SINGLE"
+                i += 1
+            elif c == '"':
+                in_token = True
+                state = "DOUBLE"
+                i += 1
+            elif c == "`":
+                in_token = True
+                i += 1
+                if i < n:
+                    escaped = string[i]
+                    current.append(_POWERSHELL_ESCAPES.get(escaped, escaped))
+                    i += 1
+            else:
+                in_token = True
+                current.append(c)
+                i += 1
+
+        elif state == "SINGLE":
+            if c == "'":
+                if i + 1 < n and string[i + 1] == "'":
+                    current.append("'")
+                    i += 2
+                else:
+                    state = "UNQUOTED"
+                    i += 1
+            else:
+                current.append(c)
+                i += 1
+
+        elif state == "DOUBLE":
+            if c == '"':
+                if i + 1 < n and string[i + 1] == '"':
+                    current.append('"')
+                    i += 2
+                else:
+                    state = "UNQUOTED"
+                    i += 1
+            elif c == "`":
+                i += 1
+                if i < n:
+                    escaped = string[i]
+                    current.append(_POWERSHELL_ESCAPES.get(escaped, escaped))
+                    i += 1
+            else:
+                current.append(c)
+                i += 1
+
+    if in_token:
+        out.append("".join(current))
+
+    return out
+
+
+split_powershell_arg_string = _split_powershell_arg_string
 
 
 def _is_incomplete_argument(ctx: Context, param: Parameter) -> bool:

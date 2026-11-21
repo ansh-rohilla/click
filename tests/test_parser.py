@@ -3,6 +3,7 @@ import pytest
 import click
 from click.parser import _OptionParser
 from click.shell_completion import split_arg_string
+from click.shell_completion import split_powershell_arg_string
 
 
 @pytest.mark.parametrize(
@@ -17,6 +18,28 @@ from click.shell_completion import split_arg_string
 )
 def test_split_arg_string(value, expect):
     assert split_arg_string(value) == expect
+
+
+@pytest.mark.parametrize(
+    ("value", "expect"),
+    [
+        ("cli a b c", ["cli", "a", "b", "c"]),
+        ("cli 'my file", ["cli", "my file"]),
+        ("cli 'my file'", ["cli", "my file"]),
+        ("cli my\\ file", ["cli", "my\\", "file"]),
+        (r"cli C:\Users\ann\doc", ["cli", r"C:\Users\ann\doc"]),
+        (r"cli C:\Temp\\", ["cli", r"C:\Temp\\"]),
+        ("cli 'it''s'", ["cli", "it's"]),
+        ('cli "a""b"', ["cli", 'a"b']),
+        ('cli "a`"b"', ["cli", 'a"b']),
+        ("cli a` b", ["cli", "a b"]),
+        ("cli a`", ["cli", "a"]),
+        ("cli '' \"\"", ["cli", "", ""]),
+        (r'--path="C:\Program Files"', [r"--path=C:\Program Files"]),
+    ],
+)
+def test_split_powershell_arg_string(value, expect):
+    assert split_powershell_arg_string(value) == expect
 
 
 def test_parser_default_prefixes():
